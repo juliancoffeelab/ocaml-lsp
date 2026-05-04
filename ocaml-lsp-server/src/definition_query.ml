@@ -1,6 +1,34 @@
 open Import
 open Fiber.O
 
+let maybe_remember_borrowed_config
+      (state : State.t)
+      (doc : Document.Merlin.t)
+      source_uri
+      locate_result
+  =
+  let should_borrow path =
+    let in_workspace = Workspaces.contains_path (State.workspaces state) path in
+    let in_build_dir =
+      Option.is_some
+        (String.substr_index path ~pattern:(Filename.dir_sep ^ "_build" ^ Filename.dir_sep))
+    in
+    (not in_workspace) || in_build_dir
+  in
+  match locate_result with
+  | `Found (Some path, _) when not (String.equal path (Uri.to_path source_uri)) ->
+    if not (should_borrow path)
+    then Fiber.return ()
+    else (
+      let target_uri = Uri.of_path path in
+      match Document_store.get_opt state.store target_uri with
+      | Some _ -> Fiber.return ()
+      | None ->
+        let+ config = Document.Merlin.mconfig doc in
+        Merlin_config.DB.remember_borrowed state.merlin_config ~uri:target_uri ~config)
+  | _ -> Fiber.return ()
+;;
+
 let location_of_merlin_loc uri : _ -> (_, string) result = function
   | `At_origin -> Error "Already at definition point"
   | `Builtin s ->
@@ -44,6 +72,7 @@ let run kind (state : State.t) ?prefix uri position =
       | `Type_definition -> Query_protocol.Locate_type pos, "type definition"
     in
     let* result = Document.Merlin.dispatch_exn ~name doc command in
+    let* () = maybe_remember_borrowed_config state doc uri result in
     (match location_of_merlin_loc uri result with
      | Ok s -> Fiber.return s
      | Error err_msg ->

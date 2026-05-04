@@ -136,6 +136,7 @@ let prefer_dot_merlin = ref false
 type db =
   { running : (string, entry) Table.t
   ; pool : Fiber.Pool.t
+  ; borrowed : (Uri.t, Mconfig.t) Table.t
   }
 
 and entry =
@@ -291,6 +292,7 @@ type nonrec t =
   { path : string
   ; directory : string
   ; initial : Mconfig.t
+  ; borrowed : Mconfig.t option
   ; mutable entry : Entry.t option
   ; db : db
   }
@@ -304,12 +306,29 @@ let destroy t =
     Entry.destroy entry
 ;;
 
-let create db path =
+let apply_borrowed_config (config : Mconfig.t) ~path ~directory =
+  let fname = Filename.basename path in
+  let dir = directory in
+  let config =
+    let open Mconfig in
+    { config with query = { config.query with filename = fname; directory = dir } }
+  in
+  Mconfig.get_external_config path (Mconfig.normalize config)
+;;
+
+let create (db : db) uri =
   let path =
-    let path = Uri.to_path path in
+    let path = Uri.to_path uri in
     Misc.canonicalize_filename path
   in
   let directory = Filename.dirname path in
+  let borrowed =
+    match Table.find db.borrowed uri with
+    | None -> None
+    | Some config ->
+      Table.remove db.borrowed uri;
+      Some config
+  in
   let initial =
     let filename = Filename.basename path in
     let init = Mconfig.initial in
@@ -318,7 +337,7 @@ let create db path =
     ; query = { init.query with filename; directory; verbosity = Mconfig.Verbosity.Smart }
     }
   in
-  { path; directory; initial; db; entry = None }
+  { path; directory; initial; borrowed; db; entry = None }
 ;;
 
 let config (t : t) : Mconfig.t Fiber.t =
@@ -327,32 +346,34 @@ let config (t : t) : Mconfig.t Fiber.t =
     t.entry <- Some entry
   in
   let* () = Fiber.return () in
-  if !prefer_dot_merlin
-  then Fiber.return (Mconfig.get_external_config t.path t.initial)
-  else (
-    match find_project_context t.directory with
-    | None ->
-      let+ () = destroy t in
-      Mconfig.get_external_config t.path t.initial
-    | Some (ctx, config_path) ->
-      let* entry = get_process t.db ~dir:ctx.process_dir in
-      let* () =
-        match t.entry with
-        | None ->
-          use_entry entry;
-          Fiber.return ()
-        | Some entry' ->
-          if Entry.equal entry entry'
-          then Fiber.return ()
-          else
-            let+ () = destroy t in
-            use_entry entry
-      in
-      let+ dot, failures = get_config entry.process ~workdir:ctx.workdir t.path in
-      let merlin =
-        Mconfig.merge_merlin_config dot t.initial.merlin ~failures ~config_path
-      in
-      Mconfig.normalize { t.initial with merlin })
+  match t.borrowed with
+  | Some config -> Fiber.return (apply_borrowed_config config ~path:t.path ~directory:t.directory)
+  | None when !prefer_dot_merlin ->
+    Fiber.return (Mconfig.get_external_config t.path t.initial)
+  | None ->
+    (match find_project_context t.directory with
+     | None ->
+       let+ () = destroy t in
+       Mconfig.get_external_config t.path t.initial
+     | Some (ctx, config_path) ->
+       let* entry = get_process t.db ~dir:ctx.process_dir in
+       let* () =
+         match t.entry with
+         | None ->
+           use_entry entry;
+           Fiber.return ()
+         | Some entry' ->
+           if Entry.equal entry entry'
+           then Fiber.return ()
+           else
+             let+ () = destroy t in
+             use_entry entry
+       in
+       let+ dot, failures = get_config entry.process ~workdir:ctx.workdir t.path in
+       let merlin =
+         Mconfig.merge_merlin_config dot t.initial.merlin ~failures ~config_path
+       in
+       Mconfig.normalize { t.initial with merlin })
 ;;
 
 module DB = struct
@@ -360,8 +381,13 @@ module DB = struct
 
   let get t uri = create t uri
 
+  let remember_borrowed (t : t) ~uri ~config = Table.set t.borrowed uri config
+
   let create () =
-    { running = Table.create (module String) 0; pool = Fiber.Pool.create () }
+    { running = Table.create (module String) 0
+    ; pool = Fiber.Pool.create ()
+    ; borrowed = Table.create (module Uri) 0
+    }
   ;;
 
   let run t = Fiber.Pool.run t.pool

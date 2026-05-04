@@ -67,3 +67,17 @@ let workspace_folders { root_uri; root_path; workspace_folders } =
        let cwd = Sys.getcwd () in
        [ WorkspaceFolder.create ~uri:(Uri.of_path cwd) ~name:(Filename.basename cwd) ])
 ;;
+
+let contains_path t path =
+  let is_descendant ~root path =
+    let with_sep =
+      if String.is_suffix root ~suffix:Filename.dir_sep
+      then root
+      else root ^ Filename.dir_sep
+    in
+    String.equal path root || String.is_prefix path ~prefix:with_sep
+  in
+  workspace_folders t
+  |> List.exists ~f:(fun (folder : WorkspaceFolder.t) ->
+    is_descendant ~root:(Uri.to_path folder.uri) path)
+;;

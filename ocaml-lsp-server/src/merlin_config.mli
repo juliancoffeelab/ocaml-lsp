@@ -15,5 +15,6 @@ module DB : sig
   val create : unit -> t
   val stop : t -> unit Fiber.t
   val run : t -> unit Fiber.t
+  val remember_borrowed : t -> uri:Uri.t -> config:Mconfig.t -> unit
   val get : t -> Uri.t -> config
 end
