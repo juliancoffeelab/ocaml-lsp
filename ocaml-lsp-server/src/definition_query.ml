@@ -36,6 +36,7 @@ let run kind (state : State.t) ?prefix uri position =
   match Document.kind doc with
   | `Other -> Fiber.return None
   | `Merlin doc ->
+    let source_origin = Merlin_config.DB.effective_origin state.merlin_config uri in
     let command, name =
       let pos = Position.logical position in
       match kind with
@@ -45,6 +46,12 @@ let run kind (state : State.t) ?prefix uri position =
     in
     let* result = Document.Merlin.dispatch_exn ~name doc command in
     (match location_of_merlin_loc uri result with
+     | Ok (Some (`Location ({ Location.uri = target; _ } :: _) as location)) ->
+       Merlin_config.DB.remember_origin
+         state.merlin_config
+         ~target
+         ~origin:source_origin;
+       Fiber.return (Some location)
      | Ok s -> Fiber.return s
      | Error err_msg ->
        let kind =
