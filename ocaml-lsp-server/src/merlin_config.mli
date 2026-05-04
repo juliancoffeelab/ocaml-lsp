@@ -13,6 +13,8 @@ module DB : sig
   type t
 
   val create : unit -> t
+  val effective_origin : t -> Uri.t -> Uri.t
+  val remember_origin : t -> target:Uri.t -> origin:Uri.t -> unit
   val stop : t -> unit Fiber.t
   val run : t -> unit Fiber.t
   val get : t -> Uri.t -> config

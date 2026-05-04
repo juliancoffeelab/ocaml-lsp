@@ -43,6 +43,7 @@
     action_extract
     action_inline
     action_mark_remove
+    borrowed_context
     code_actions
     code_lens
     completion
