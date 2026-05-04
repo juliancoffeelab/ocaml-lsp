@@ -135,6 +135,7 @@ let prefer_dot_merlin = ref false
 
 type db =
   { running : (string, entry) Table.t
+  ; borrowed_contexts : (string, string) Table.t
   ; pool : Fiber.Pool.t
   }
 
@@ -177,14 +178,24 @@ let get_process t ~dir =
     entry
 ;;
 
+let canonicalize_uri uri =
+  uri |> Uri.to_path |> Misc.canonicalize_filename
+;;
+
 type context =
   { workdir : string
   ; process_dir : string
   }
 
-let get_config (p : Process.t) ~workdir path_abs =
-  let query path (p : Process.t) =
-    let* () = Dot_protocol_io.Commands.send_file p.session path in
+let get_config (p : Process.t) ~workdir ?context_origin path_abs =
+  let query ?context path (p : Process.t) =
+    let request =
+      let open Csexp in
+      match context with
+      | None -> List [ Atom "File"; Atom path ]
+      | Some context -> List [ Atom "File"; Atom path; Atom "Context"; Atom context ]
+    in
+    let* () = Lev_fiber_csexp.Session.write p.session [ request ] in
     Dot_protocol_io.read p.session
   in
   (* Both [p.initial_cwd] and [path_abs] have gone through
@@ -207,11 +218,18 @@ let get_config (p : Process.t) ~workdir path_abs =
   (* Starting with Dune 2.8.3 relative paths are prefered. However to maintain
      compatibility with 2.8 <= Dune <= 2.8.2 we always retry with an absolute
      path if using a relative one failed *)
-  let+ answer =
-    let* query_path = query path p in
+  let query_with_fallback ?context path =
+    let* query_path = query ?context path p in
     match query_path with
-    | Ok [ `ERROR_MSG _ ] -> query path_abs p
+    | Ok [ `ERROR_MSG _ ] -> query ?context path_abs p
     | answer -> Fiber.return answer
+  in
+  let+ answer =
+    let* answer = query_with_fallback path in
+    match answer, context_origin with
+    | Ok [ `ERROR_MSG _ ], Some context_origin ->
+      query_with_fallback ~context:context_origin path
+    | _ -> Fiber.return answer
   in
   match answer with
   | Ok directives ->
@@ -326,11 +344,17 @@ let config (t : t) : Mconfig.t Fiber.t =
     Entry.incr entry;
     t.entry <- Some entry
   in
+  let context_origin = Table.find t.db.borrowed_contexts t.path in
+  let context_directory =
+    match context_origin with
+    | None -> t.directory
+    | Some origin -> Filename.dirname origin
+  in
   let* () = Fiber.return () in
   if !prefer_dot_merlin
   then Fiber.return (Mconfig.get_external_config t.path t.initial)
   else (
-    match find_project_context t.directory with
+    match find_project_context context_directory with
     | None ->
       let+ () = destroy t in
       Mconfig.get_external_config t.path t.initial
@@ -348,7 +372,9 @@ let config (t : t) : Mconfig.t Fiber.t =
             let+ () = destroy t in
             use_entry entry
       in
-      let+ dot, failures = get_config entry.process ~workdir:ctx.workdir t.path in
+      let+ dot, failures =
+        get_config entry.process ~workdir:ctx.workdir ?context_origin t.path
+      in
       let merlin =
         Mconfig.merge_merlin_config dot t.initial.merlin ~failures ~config_path
       in
@@ -361,7 +387,28 @@ module DB = struct
   let get t uri = create t uri
 
   let create () =
-    { running = Table.create (module String) 0; pool = Fiber.Pool.create () }
+    { running = Table.create (module String) 0
+    ; borrowed_contexts = Table.create (module String) 0
+    ; pool = Fiber.Pool.create ()
+    }
+  ;;
+
+  let effective_origin t uri =
+    let uri' =
+      let path = canonicalize_uri uri in
+      match Table.find t.borrowed_contexts path with
+      | None -> path
+      | Some origin -> origin
+    in
+    Uri.of_path uri'
+  ;;
+
+  let remember_origin t ~target ~origin =
+    let target = canonicalize_uri target in
+    let origin = canonicalize_uri origin in
+    if String.equal target origin
+    then Table.remove t.borrowed_contexts target
+    else Table.set t.borrowed_contexts target origin
   ;;
 
   let run t = Fiber.Pool.run t.pool
