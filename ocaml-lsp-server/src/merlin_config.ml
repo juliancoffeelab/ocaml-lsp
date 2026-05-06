@@ -225,10 +225,13 @@ let get_config (p : Process.t) ~workdir ?context_origin path_abs =
     | answer -> Fiber.return answer
   in
   let+ answer =
-    let* answer = query_with_fallback path in
-    match answer, context_origin with
-    | Ok [ `ERROR_MSG _ ], Some context_origin -> query_with_fallback ~context:context_origin path
-    | _ -> Fiber.return answer
+    match context_origin with
+    | None -> query_with_fallback path
+    | Some context_origin ->
+      let* answer = query_with_fallback ~context:context_origin path in
+      (match answer with
+       | Ok [ `ERROR_MSG _ ] -> query_with_fallback path
+       | _ -> Fiber.return answer)
   in
   match answer with
   | Ok directives ->
