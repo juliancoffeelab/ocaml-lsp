@@ -24,6 +24,9 @@
   lev
   ocaml_lsp_server
   spawn
+  merlin-lib.kernel
+  merlin-lib.query_commands
+  merlin-lib.query_protocol
   jsonrpc
   lsp
   lsp_fiber
