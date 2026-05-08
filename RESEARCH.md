@@ -252,3 +252,32 @@ Body:
 Rudi Grinberg answer:
 
 > Not possible at the moment. Once we have dune integration, it should be possible to start addressing this.
+
+## Build Environment Note
+
+There is also a separate reproducibility problem on the `ocaml-lsp`
+side: the repository build instructions can be stale relative to the
+actual dependency constraints. See
+[`ocaml-lsp#1602`](https://github.com/ocaml/ocaml-lsp/issues/1602),
+opened on May 4, 2026.
+
+That issue reports that the README-style local switch flow can fail when
+the project is pinned and built directly, with the build dying in
+`ocaml-lsp-server/src/merlin_config.ml` on:
+
+- `Error: Unbound module Ocaml_utils.Misc`
+
+The workaround recorded there is:
+
+```sh
+opam switch create . 5.4.1 --no-install --yes
+opam --cli=2.1 pin --with-version=5.7-504 https://github.com/ocaml/merlin.git#main
+opam install . --deps-only
+make install-test-deps
+dune build
+```
+
+This matters for the experiment branches here because the agents did not
+capture this environment story in their original notes, and their local
+results on `ocaml-lsp` should not be treated as proof that the
+repository is reproducible from the README alone.
