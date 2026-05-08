@@ -432,3 +432,20 @@ Why this fails:
 +  rather than a richer per-external-file ownership model.
 +- The path is harder to validate than PR4-style sticky context because
 +  you need both the API shape and the editor state flow to line up.
+
+## Environment Postmortem
+
+The `ocaml-lsp` side of this experiment was under-documented
+operationally.
+
+- The agents did not record a reproducible switch/pinning setup.
+- Clean focused `ocaml-lsp` test execution was not successfully
+  demonstrated from a fresh environment.
+- The branch validation on `ocaml-lsp` relied more on editor-level proof
+  with this machine's existing environment than on a cleanly reproduced
+  test setup.
+
+This is not just theoretical. See
+[`ocaml-lsp#1602`](https://github.com/ocaml/ocaml-lsp/issues/1602),
+which documents the README-style local-switch flow failing and a Merlin
+Git pin being needed as a workaround.
